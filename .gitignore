@@ -1,0 +1,7 @@
+# Ignore all CSV files
+*.csv
+
+# Python virtual environment and cache
+venv/
+__pycache__/
+*.pyc
