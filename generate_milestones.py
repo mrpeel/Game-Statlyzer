@@ -3,6 +3,306 @@ import re
 from pathlib import Path
 from datetime import datetime
 import glob
+import os
+
+def parse_scorecard(filepath):
+    """Parse a Markdown scorecard for Laburnum innings, batting, and FOW data."""
+    if not os.path.exists(filepath):
+        return []
+        
+    with open(filepath, 'r', encoding="utf-8") as f:
+        content = f.read()
+    
+    # Split by innings (##)
+    innings_blocks = re.split(r'\n## ', content)
+    laburnum_innings = []
+    
+    # Also extract the game metadata from the top
+    match_title = ""
+    title_match = re.search(r'^# (.*)', content)
+    if title_match:
+        match_title = title_match.group(1).strip()
+        
+    for block in innings_blocks:
+        # Check if it's a Laburnum innings
+        if 'LAB' in block or 'Laburnum' in block:
+            header = block.split('\n')[0].strip()
+            
+            # Find Batting table
+            batting_match = re.search(r'### Batting\n\| Batting \|.*?\|\n\| --- \|.*?\|\n((?:\|.*?\|\n)+)', block)
+            batting_data = []
+            if batting_match:
+                rows = batting_match.group(1).strip().split('\n')
+                for row in rows:
+                    cols = [c.strip() for c in row.split('|') if c.strip()]
+                    if len(cols) >= 3:
+                        name = cols[0]
+                        wicket_info = cols[1]
+                        if 'did not bat' in wicket_info.lower():
+                            continue
+                        
+                        runs_str = cols[2].replace('*', '').strip()
+                        runs = int(runs_str) if runs_str.isdigit() else 0
+                        
+                        balls = 0
+                        if len(cols) > 3:
+                            balls_str = cols[3].strip()
+                            balls = int(balls_str) if balls_str.isdigit() else 0
+                            
+                        fours = 0
+                        if len(cols) > 4:
+                            fours_str = cols[4].strip()
+                            fours = int(fours_str) if fours_str.isdigit() else 0
+                            
+                        sixes = 0
+                        if len(cols) > 5:
+                            sixes_str = cols[5].strip()
+                            sixes = int(sixes_str) if sixes_str.isdigit() else 0
+                            
+                        batting_data.append({
+                            'name': name,
+                            'runs': runs,
+                            'balls': balls,
+                            '4s': fours,
+                            '6s': sixes,
+                            'out': 'not out' not in wicket_info.lower() and 'retired' not in wicket_info.lower()
+                        })
+            
+            # Find Fall of Wickets
+            fow_match = re.search(r'### Fall of Wickets\n((?:- .*?\n)+)', block)
+            fow_data = []
+            if fow_match:
+                rows = fow_match.group(1).strip().split('\n')
+                for row in rows:
+                    # Pattern: - 1-10 - Jason Hugo (c: ******** b: H Mills)
+                    m = re.match(r'- (\d+)-(\d+) - (.*?) \(', row)
+                    if m:
+                        fow_data.append({
+                            'wicket': int(m.group(1)),
+                            'score': int(m.group(2)),
+                            'player': m.group(3).strip()
+                        })
+            
+            # Extract Total Score
+            total_score = 0
+            total_match = re.search(r'\*\*Total:\*\* TOTAL\s+.*\|\s+(\d+)\s*$', block)
+            if total_match:
+                total_score = int(total_match.group(1))
+            elif batting_data:
+                extras_match = re.search(r'\*\*Extras:\*\* Extras\s+.*?\s+\|\s+(\d+)', block)
+                extras = int(extras_match.group(1)) if extras_match else 0
+                total_score = sum(b['runs'] for b in batting_data) + extras
+
+            if batting_data or fow_data:
+                laburnum_innings.append({
+                    'name': header,
+                    'batting': batting_data,
+                    'fow': fow_data,
+                    'total_score': total_score
+                })
+    
+    return laburnum_innings
+
+def get_scorecard_path(csv_path):
+    """Find the corresponding Markdown scorecard for a given ball-by-ball CSV."""
+    stem = csv_path.stem
+    try:
+        parts = stem.split(" - ", 1)
+        if len(parts) < 2: return None
+        
+        date_str_full = parts[0].strip()
+        # Handle formats like "Sat, 11 Jan 2025"
+        if ", " in date_str_full:
+            date_part = date_str_full.split(", ")[1]
+        else:
+            date_part = date_str_full
+            
+        date_obj = datetime.strptime(date_part, "%d %b %Y")
+        date_formatted = date_obj.strftime("%Y-%m-%d")
+        
+        match_teams = parts[1]
+        teams = match_teams.split(" v ")
+        if len(teams) < 2: return None
+        
+        if "Laburnum" in teams[0]:
+            team = teams[0].strip()
+            opposition = teams[1].strip()
+        else:
+            team = teams[1].strip()
+            opposition = teams[0].strip()
+            
+        # Clean team names for matching (remove "CC" or other suffix if needed)
+        # But our scraper uses full names, so let's try exact first.
+        
+        results_dir = Path("game_results")
+        if not results_dir.exists(): return None
+        
+        # Pattern matching: date and team name
+        # We use wildcards because the season is at the start and team names might vary slightly
+        pattern = f"*{date_formatted}*{opposition}*.md"
+        matches = list(results_dir.glob(pattern))
+        if not matches:
+            pattern = f"*{date_formatted}*.md"
+            matches = list(results_dir.glob(pattern))
+            
+        if matches:
+            # Pick the best match (one containing Laburnum team name)
+            for m in matches:
+                if team in m.name:
+                    return m
+            return matches[0]
+            
+    except Exception as e:
+        # print(f"Lookup error for {csv_path.name}: {e}")
+        pass
+    return None
+
+def generate_milestones_from_scorecard(scorecard_path, csv_path):
+    """Reconstruct milestones from a Markdown scorecard when ball-by-ball is missing."""
+    print(f"Fallback: Using scorecard {scorecard_path.name} for {csv_path.name}")
+    
+    innings_data = parse_scorecard(scorecard_path)
+    if not innings_data:
+        print(f"  No Laburnum data found in scorecard {scorecard_path.name}")
+        return False
+        
+    # Get metadata for output filename
+    stem = csv_path.stem
+    try:
+        parts = stem.split(" - ", 1)
+        date_part = parts[0].split(", ")[1]
+        date_obj = datetime.strptime(date_part, "%d %b %Y")
+        date_formatted = date_obj.strftime("%Y-%m-%d")
+        season = parse_date_to_season(date_obj)
+        match_teams = parts[1]
+        teams = match_teams.split(" v ")
+        if "Laburnum" in teams[0]:
+            team = teams[0].strip()
+            opposition = teams[1].strip()
+        else:
+            team = teams[1].strip()
+            opposition = teams[0].strip()
+    except Exception:
+        # Fallback metadata from filename
+        date_formatted = "unknown"
+        season = "unknown"
+        team = "Laburnum"
+        opposition = "Opposition"
+    
+    safe_season = season.replace("/", "-")
+    out_filename_base = f"{safe_season} {team} {date_formatted} {opposition}"
+    
+    all_milestones = []
+    
+    # Read content once for regex searches
+    with open(scorecard_path, 'r', encoding="utf-8") as f:
+        content = f.read()
+
+    for inn in innings_data:
+        batting = inn['batting']
+        fow_list = inn['fow']
+        total_score = inn['total_score']
+        innings_name = inn['name']
+        
+        if not batting: continue
+        
+        # Try to find overs for this specific innings block
+        innings_overs = "N/A"
+        block_match = re.search(rf'## {re.escape(innings_name)}.*?\|\s+([\d\.]+)\s+Overs', content, re.DOTALL)
+        if block_match:
+            innings_overs = block_match.group(1)
+
+        milestones = []
+        crease = []
+        if len(batting) >= 1:
+            crease.append(batting[0]['name'])
+        if len(batting) >= 2:
+            crease.append(batting[1]['name'])
+            
+        partnership_start_score = 0
+        next_batter_idx = 2
+        
+        def get_batter_stats(name):
+            for b in batting:
+                if b['name'] == name:
+                    star = "*" if not b['out'] else ""
+                    return f"{b['name']}{star}, {b['runs']} ({b['balls']}), 4s: {b['4s']}, 6s: {b['6s']}, SR: 0.0"
+            return f"{name}, 0 (0), 4s: 0, 6s: 0, SR: 0.0"
+
+        for fow in fow_list:
+            out_player = fow['player'].strip()
+            
+            # Handle retirements
+            while out_player not in crease and next_batter_idx < len(batting):
+                # print(f"    Retirement: {crease[0] if crease else 'None'} replaced by {batting[next_batter_idx]['name']}")
+                if len(crease) > 0:
+                    crease.pop(0)
+                crease.append(batting[next_batter_idx]['name'])
+                next_batter_idx += 1
+            
+            score = fow['score']
+            p_total = score - partnership_start_score
+            
+            b1_str = get_batter_stats(crease[0]) if len(crease) > 0 else ""
+            b2_str = get_batter_stats(crease[1]) if len(crease) > 1 else ""
+            
+            milestones.append({
+                "Innings": innings_name,
+                "Milestone Name": f"{out_player} dismissed",
+                "Score": f"{fow['wicket']}/{score}",
+                "Overs": "N/A",
+                "Partnership": str(p_total),
+                "Partnership Balls": "N/A",
+                "Runs since last wicket": str(p_total),
+                "FOW Balls": "N/A",
+                "Batter 1": b1_str,
+                "Batter 2": b2_str
+            })
+            
+            partnership_start_score = score
+            
+            if out_player in crease:
+                crease.remove(out_player)
+            
+            if next_batter_idx < len(batting):
+                crease.append(batting[next_batter_idx]['name'])
+                next_batter_idx += 1
+        
+        # Final partnership
+        p_total = total_score - partnership_start_score
+        b1_str = get_batter_stats(crease[0]) if len(crease) > 0 else ""
+        b2_str = get_batter_stats(crease[1]) if len(crease) > 1 else ""
+        final_wickets = len(fow_list)
+        
+        milestones.append({
+            "Innings": innings_name,
+            "Milestone Name": "Innings Complete",
+            "Score": f"{final_wickets}/{total_score}",
+            "Overs": innings_overs,
+            "Partnership": str(p_total),
+            "Partnership Balls": "N/A",
+            "Runs since last wicket": str(p_total),
+            "FOW Balls": "N/A",
+            "Batter 1": b1_str,
+            "Batter 2": b2_str
+        })
+            
+        all_milestones.extend(milestones)
+        
+    if not all_milestones:
+        return False
+        
+    out_dir = Path("game_milestones")
+    out_dir.mkdir(exist_ok=True)
+    csv_out_path = out_dir / f"{out_filename_base}.csv"
+    
+    with open(csv_out_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=["Innings", "Milestone Name", "Score", "Overs", "Partnership", "Partnership Balls", "Runs since last wicket", "FOW Balls", "Batter 1", "Batter 2"])
+        writer.writeheader()
+        writer.writerows(all_milestones)
+        
+    print(f"  Successfully generated milestones from scorecard to:\n  - {csv_out_path}")
+    return True
 
 def parse_date_to_season(date_obj):
     year = date_obj.year
@@ -59,7 +359,11 @@ def generate_milestones(csv_path):
             
     if not laburnum_innings_names:
         print(f"No Laburnum innings found in {csv_path.name}")
-        return
+        # Try fallback
+        scorecard_path = get_scorecard_path(csv_path)
+        if scorecard_path:
+            return generate_milestones_from_scorecard(scorecard_path, csv_path)
+        return False
     
     # Collect all milestones across all innings
     all_milestones = []
@@ -80,14 +384,39 @@ def generate_milestones(csv_path):
         milestones = []
         team_50s_reached = 0
         ball_str = ""
+        partnership_start_stats = {}  # snapshot of each batter's stats at partnership start
+        
+        def snapshot_partnership_stats():
+            """Snapshot current stats for all batters on the crease."""
+            for name in crease:
+                if name in batters:
+                    b = batters[name]
+                    partnership_start_stats[name] = {"runs": b["runs"], "balls": b["balls"], "4s": b["4s"], "6s": b["6s"]}
+                else:
+                    partnership_start_stats[name] = {"runs": 0, "balls": 0, "4s": 0, "6s": 0}
         
         def get_batter_stats_str(name):
+            """Get batter's total innings stats string."""
             if name not in batters:
                 return f"{name}(*), 0 (0), 4s: 0, 6s: 0, SR: 0.0"
             b = batters[name]
             star = "*" if not b["out"] else ""
             sr = (b["runs"] / b["balls"] * 100) if b["balls"] > 0 else 0.0
             return f"{name}{star}, {b['runs']} ({b['balls']}), 4s: {b['4s']}, 6s: {b['6s']}, SR: {sr:.1f}"
+
+        def get_partnership_batter_stats_str(name):
+            """Get batter's stats for the current partnership only (delta from snapshot)."""
+            if name not in batters:
+                return f"{name}(*), 0 (0), 4s: 0, 6s: 0, SR: 0.0"
+            b = batters[name]
+            start = partnership_start_stats.get(name, {"runs": 0, "balls": 0, "4s": 0, "6s": 0})
+            p_runs = b["runs"] - start["runs"]
+            p_balls = b["balls"] - start["balls"]
+            p_4s = b["4s"] - start["4s"]
+            p_6s = b["6s"] - start["6s"]
+            star = "*" if not b["out"] else ""
+            sr = (p_runs / p_balls * 100) if p_balls > 0 else 0.0
+            return f"{name}{star}, {p_runs} ({p_balls}), 4s: {p_4s}, 6s: {p_6s}, SR: {sr:.1f}"
 
         def record_milestone(name, over_str, is_retirement=False):
             nonlocal partnership_balls, fow_balls
@@ -99,8 +428,8 @@ def generate_milestones(csv_path):
             partnership = effective_runs - partnership_start_runs
             runs_since_last = effective_runs - runs_at_last_wicket
             
-            b1_str = get_batter_stats_str(crease[0]) if len(crease) > 0 else ""
-            b2_str = get_batter_stats_str(crease[1]) if len(crease) > 1 else ""
+            b1_str = get_partnership_batter_stats_str(crease[0]) if len(crease) > 0 else ""
+            b2_str = get_partnership_batter_stats_str(crease[1]) if len(crease) > 1 else ""
             milestones.append({
                 "Innings": innings_name,
                 "Milestone Name": name,
@@ -145,6 +474,8 @@ def generate_milestones(csv_path):
             if batter not in crease:
                 if len(crease) < 2:
                     crease.append(batter)
+                    if len(crease) == 2:
+                        snapshot_partnership_stats()
                 else:
                     retired_batter = crease[0]
                     for c in crease:
@@ -164,8 +495,8 @@ def generate_milestones(csv_path):
                     partnership_balls = 0
                     
                     crease.remove(retired_batter)
-                    # Note: "retired not out" means they are not out, so we keep batters[retired_batter]["out"] = False
                     crease.append(batter)
+                    snapshot_partnership_stats()
                     
             runs_scored = 0
             balls_faced = 1
@@ -207,6 +538,7 @@ def generate_milestones(csv_path):
                 fow_balls = 0
                 if batter in crease:
                     crease.remove(batter)
+                snapshot_partnership_stats()
                     
             if team_runs // 50 > team_50s_reached:
                 team_50s_reached = team_runs // 50
@@ -237,6 +569,7 @@ def generate_milestones(csv_path):
         writer.writerows(all_milestones)
         
     print(f"Successfully generated milestones to:\n- {csv_out_path}")
+    return True
 
 if __name__ == "__main__":
     data_dir = Path("ball_by_ball_data")
@@ -247,7 +580,12 @@ if __name__ == "__main__":
     
     for csv_file in csv_files:
         try:
-            result = generate_milestones(csv_file)
+            success = generate_milestones(csv_file)
+            if not success:
+                # If no Laburnum data in CSV, try fallback directly
+                scorecard_path = get_scorecard_path(csv_file)
+                if scorecard_path:
+                    generate_milestones_from_scorecard(scorecard_path, csv_file)
         except Exception as e:
             print(f"Failed processing {csv_file.name}: {e}")
     

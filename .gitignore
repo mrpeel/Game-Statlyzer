@@ -1,6 +1,9 @@
 # Ignore all CSV files
 *.csv
 
+# ignore game results
+game_results/*.md
+
 # Python virtual environment and cache
 venv/
 __pycache__/

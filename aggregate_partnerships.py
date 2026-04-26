@@ -8,6 +8,14 @@ def aggregate_stats():
     out_dir = Path("team_season_milestones")
     out_dir.mkdir(exist_ok=True)
     
+    def safe_int(val):
+        if not val or val == "N/A":
+            return 0
+        try:
+            return int(val)
+        except ValueError:
+            return 0
+    
     # Structure: season_team_key -> { "partnerships": { wicket_num: [rows] }, "fow": { wicket_num: [rows] } }
     grouped_data = defaultdict(lambda: {"partnerships": defaultdict(list), "fow": defaultdict(list)})
     
@@ -49,8 +57,8 @@ def aggregate_stats():
             
             if "dismissed" in name:
                 # --- Partnerships file: wicket number stays the same as current ---
-                p_runs = int(row.get("Partnership", 0))
-                p_balls = int(row.get("Partnership Balls", 0))
+                p_runs = safe_int(row.get("Partnership", 0))
+                p_balls = safe_int(row.get("Partnership Balls", 0))
                 b1 = row.get("Batter 1", "")
                 b2 = row.get("Batter 2", "")
                 
@@ -63,8 +71,8 @@ def aggregate_stats():
                 })
                 
                 # --- Fall of wicket file ---
-                fow_runs = int(row.get("Runs since last wicket", 0))
-                fow_balls = int(row.get("FOW Balls", 0))
+                fow_runs = safe_int(row.get("Runs since last wicket", 0))
+                fow_balls = safe_int(row.get("FOW Balls", 0))
                 other_batters = " | ".join(retired_batters_since_last_wicket)
                 grouped_data[key]["fow"][current_wicket_number].append({
                     "Wicket Number": current_wicket_number,
@@ -81,8 +89,8 @@ def aggregate_stats():
                 
             elif "Innings Complete" in name:
                 # Final unbroken partnership — record but don't increment
-                p_runs = int(row.get("Partnership", 0))
-                p_balls = int(row.get("Partnership Balls", 0))
+                p_runs = safe_int(row.get("Partnership", 0))
+                p_balls = safe_int(row.get("Partnership Balls", 0))
                 b1 = row.get("Batter 1", "")
                 b2 = row.get("Batter 2", "")
                 
@@ -94,8 +102,8 @@ def aggregate_stats():
                     "Batter 2": b2
                 })
                 
-                fow_runs = int(row.get("Runs since last wicket", 0))
-                fow_balls = int(row.get("FOW Balls", 0))
+                fow_runs = safe_int(row.get("Runs since last wicket", 0))
+                fow_balls = safe_int(row.get("FOW Balls", 0))
                 other_batters = " | ".join(retired_batters_since_last_wicket)
                 grouped_data[key]["fow"][current_wicket_number].append({
                     "Wicket Number": current_wicket_number,
