@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Game Statlyzer Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <div class="logo">🏏 Game Statlyzer</div>
+        <div class="controls">
+            <select id="gameSelect">
+                <option value="">Select a game...</option>
+            </select>
+        </div>
+    </header>
+
+    <main class="grid-container">
+        <!-- Panel 1: Markdown Scorecard -->
+        <section class="panel" id="scorecardPanel">
+            <div class="panel-header">
+                <h2>📋 PlayHQ Scorecard</h2>
+                <span class="status-badge" id="scorecardStatus">Waiting</span>
+            </div>
+            <div class="panel-content" id="scorecardContent">
+                <div class="placeholder">Select a game to load scorecard</div>
+            </div>
+        </section>
+
+        <!-- Panel 2: Milestones CSV -->
+        <section class="panel" id="milestonesPanel">
+            <div class="panel-header">
+                <h2>🎯 Calculated Milestones</h2>
+                <span class="status-badge" id="milestonesStatus">Waiting</span>
+            </div>
+            <div class="panel-content table-container" id="milestonesContent">
+                <div class="placeholder">Select a game to load milestones</div>
+            </div>
+        </section>
+
+        <!-- Panel 3: Ball-by-ball CSV -->
+        <section class="panel" id="bbbPanel">
+            <div class="panel-header">
+                <h2>⚾️ Ball-by-Ball Data</h2>
+                <span class="status-badge" id="bbbStatus">Waiting</span>
+            </div>
+            <div class="panel-content table-container" id="bbbContent">
+                <div class="placeholder">Select a game to load ball-by-ball data</div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Dependencies -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
